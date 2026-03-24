@@ -44,7 +44,9 @@ def rollback(backup_dir: str) -> None:
             SudoHelper.run(f'cp -p "{backup}" "{original}"')
             print(f"  Restored: {original}")
 
-            if "sshd" in original:
+            if "ssh" in original:
+                # Try both service names — one will exist
+                services_to_restart.add("ssh")
                 services_to_restart.add("sshd")
             if "fail2ban" in original:
                 services_to_restart.add("fail2ban")

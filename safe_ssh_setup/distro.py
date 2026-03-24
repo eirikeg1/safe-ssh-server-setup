@@ -14,6 +14,7 @@ class DistroInfo:
     package_manager: str
     firewall: str
     auto_updates_package: str
+    ssh_service: str
 
 
 def detect_distro() -> DistroInfo:
@@ -43,6 +44,7 @@ def detect_distro() -> DistroInfo:
             package_manager="apt",
             firewall="ufw",
             auto_updates_package="unattended-upgrades",
+            ssh_service="ssh",
         )
     elif any(d in identifiers for d in ("fedora", "rhel", "centos", "rocky", "alma")):
         return DistroInfo(
@@ -52,6 +54,7 @@ def detect_distro() -> DistroInfo:
             package_manager="dnf",
             firewall="firewalld",
             auto_updates_package="dnf-automatic",
+            ssh_service="sshd",
         )
     else:
         raise DistroDetectionError(

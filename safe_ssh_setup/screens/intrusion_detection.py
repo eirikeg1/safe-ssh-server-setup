@@ -59,7 +59,7 @@ class IntrusionDetectionScreen(WizardScreen):
             action_type=ActionType.RUN_COMMAND,
             description="Update rkhunter properties database",
             target="rkhunter",
-            command="rkhunter --update && rkhunter --propupd",
+            command="rkhunter --update || true; rkhunter --propupd",
             requires_sudo=True,
             step_name=self.step_name,
         ))

@@ -78,7 +78,7 @@ class ApplyScreen(WizardScreen):
                 if not success:
                     had_failure = True
                     if (
-                        action.target == "sshd"
+                        action.target in ("ssh", "sshd")
                         and "Validate" in action.description
                     ):
                         executor._restore_sshd_config()

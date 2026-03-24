@@ -136,7 +136,7 @@ class ActionExecutor:
             # If sshd_config validation fails, restore immediately
             if (
                 not success
-                and action.target == "sshd"
+                and action.target in ("ssh", "sshd")
                 and "Validate" in action.description
             ):
                 self._restore_sshd_config()
@@ -182,8 +182,8 @@ class ActionExecutor:
             lines.append(f'cp -p "{backup}" "{original}"')
             lines.append(f'echo "  Restored: {original}"')
 
-            if "sshd" in original:
-                services_to_restart.add("sshd")
+            if "ssh" in original:
+                services_to_restart.add(self.state.ssh_service)
             if "fail2ban" in original:
                 services_to_restart.add("fail2ban")
             if "knockd" in original:

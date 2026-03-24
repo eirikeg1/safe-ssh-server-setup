@@ -157,10 +157,12 @@ class SSHHardeningScreen(WizardScreen):
             step_name=self.step_name,
         ))
 
+        svc = self.state.ssh_service
+
         self.state.actions.append(PlannedAction(
             action_type=ActionType.RUN_COMMAND,
             description="Validate sshd_config syntax",
-            target="sshd",
+            target=svc,
             command="sshd -t -f /etc/ssh/sshd_config",
             requires_sudo=True,
             step_name=self.step_name,
@@ -169,8 +171,8 @@ class SSHHardeningScreen(WizardScreen):
         self.state.actions.append(PlannedAction(
             action_type=ActionType.ENABLE_SERVICE,
             description="Enable SSH daemon to start at boot",
-            target="sshd",
-            command="systemctl enable sshd",
+            target=svc,
+            command=f"systemctl enable {svc}",
             requires_sudo=True,
             step_name=self.step_name,
         ))
@@ -178,8 +180,8 @@ class SSHHardeningScreen(WizardScreen):
         self.state.actions.append(PlannedAction(
             action_type=ActionType.RESTART_SERVICE,
             description="Restart SSH daemon",
-            target="sshd",
-            command="systemctl restart sshd",
+            target=svc,
+            command=f"systemctl restart {svc}",
             requires_sudo=True,
             step_name=self.step_name,
         ))

@@ -108,6 +108,7 @@ class SSHKeyConfig:
 class WizardState:
     distro: DistroFamily | None = None
     distro_name: str = ""
+    ssh_service: str = "sshd"
 
     ssh_config: SSHConfig = field(default_factory=SSHConfig)
     ssh_key: SSHKeyConfig = field(default_factory=SSHKeyConfig)

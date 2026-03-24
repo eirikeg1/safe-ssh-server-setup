@@ -6,7 +6,8 @@ import sys
 
 from safe_ssh_setup.sudo import SudoHelper
 
-SERVICES = ["sshd", "fail2ban", "knockd"]
+# Try both ssh service names — Debian uses "ssh", Fedora uses "sshd"
+SERVICES = ["ssh", "sshd", "fail2ban", "knockd"]
 
 
 def _is_active(service: str) -> bool:

@@ -49,6 +49,7 @@ class WelcomeScreen(WizardScreen):
             distro = detect_distro()
             self.state.distro = distro.family
             self.state.distro_name = f"{distro.name} {distro.version}"
+            self.state.ssh_service = distro.ssh_service
             distro_label.update(
                 f"Detected: {distro.name} {distro.version} "
                 f"(package manager: {distro.package_manager}, "
