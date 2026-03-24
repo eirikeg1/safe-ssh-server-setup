@@ -71,7 +71,7 @@ class ApplyScreen(WizardScreen):
                 results.append((action, success, message))
 
                 # Use call_from_thread for thread-safe UI updates
-                self.call_from_thread(
+                self.app.call_from_thread(
                     self._update_progress, i + 1, total, action, success, message
                 )
 
@@ -82,7 +82,7 @@ class ApplyScreen(WizardScreen):
                         and "Validate" in action.description
                     ):
                         executor._restore_sshd_config()
-                        self.call_from_thread(
+                        self.app.call_from_thread(
                             log.write,
                             "[yellow]sshd_config validation failed — original restored[/yellow]"
                         )
