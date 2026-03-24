@@ -12,7 +12,7 @@ Screen {
 StepIndicator {
     height: 3;
     padding: 0 2;
-    background: $primary-background;
+    background: $surface-lighten-1;
 }
 
 StepIndicator .step-label {
@@ -34,7 +34,7 @@ NavBar {
     padding: 0 2;
     align: center middle;
     dock: bottom;
-    background: $primary-background;
+    background: $surface-lighten-1;
 }
 
 NavBar Button {
@@ -60,15 +60,15 @@ NavBar #btn-skip {
 
 .welcome-subtitle {
     text-align: center;
-    color: $text-muted;
+    color: $text;
     padding: 0 0 1 0;
 }
 
 .distro-info {
     padding: 1 2;
     margin: 1 0;
-    background: $panel;
-    border: round $primary;
+    background: $surface-lighten-1;
+    border: round $accent;
 }
 
 /* Section headers in wizard screens */
@@ -79,7 +79,7 @@ NavBar #btn-skip {
 }
 
 .section-description {
-    color: $text-muted;
+    color: $text;
     padding: 0 0 1 0;
 }
 
@@ -120,8 +120,8 @@ NavBar #btn-skip {
 .action-summary {
     padding: 1 2;
     margin: 1 0;
-    background: $panel;
-    border: round $primary;
+    background: $surface-lighten-1;
+    border: round $accent;
 }
 
 /* Apply screen */
@@ -132,14 +132,14 @@ NavBar #btn-skip {
 .apply-log {
     height: 1fr;
     padding: 1 2;
-    border: round $primary;
+    border: round $accent;
 }
 
 /* Summary screen */
 .summary-section {
     padding: 1 2;
     margin: 1 0;
-    background: $panel;
+    background: $surface-lighten-1;
     border: round $success;
 }
 
@@ -149,4 +149,5 @@ NavBar #btn-skip {
     background: $error 20%;
     border: round $error;
     text-style: bold;
+    color: $text;
 }

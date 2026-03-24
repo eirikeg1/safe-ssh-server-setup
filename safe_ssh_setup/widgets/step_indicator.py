@@ -28,7 +28,7 @@ class StepIndicator(Widget):
     StepIndicator {
         height: 3;
         padding: 0 1;
-        background: $primary-background;
+        background: $surface-lighten-1;
     }
     """
 
@@ -51,10 +51,10 @@ class StepIndicator(Widget):
             elif i == self.current_step:
                 text.append(f" >>> {label} ", style="bold white")
             else:
-                text.append(f" [ ] {label} ", style="dim")
+                text.append(f" [ ] {label} ", style="grey70")
 
             if i < self.total_steps - 1:
-                text.append("--", style="dim")
+                text.append("--", style="grey50")
 
         return text
 

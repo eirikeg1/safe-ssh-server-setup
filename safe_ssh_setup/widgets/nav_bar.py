@@ -14,7 +14,7 @@ class NavBar(Widget):
         height: auto;
         padding: 1 2;
         dock: bottom;
-        background: $primary-background;
+        background: $surface-lighten-1;
         layout: horizontal;
         align: center middle;
     }

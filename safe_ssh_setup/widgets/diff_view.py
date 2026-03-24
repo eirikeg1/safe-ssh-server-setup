@@ -12,8 +12,8 @@ class DiffView(Static):
     DEFAULT_CSS = """
     DiffView {
         padding: 1 2;
-        background: $surface;
-        border: round $primary;
+        background: $surface-lighten-1;
+        border: round $accent;
     }
     """
 
@@ -52,6 +52,6 @@ class DiffView(Static):
                 text.append(line + "\n")
 
         if not text.plain.strip():
-            text.append("(no changes)", style="dim")
+            text.append("(no changes)", style="italic grey70")
 
         self.update(text)
