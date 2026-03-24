@@ -32,6 +32,9 @@ def main() -> None:
     _ensure_linux()
     _ensure_sudo()
 
+    from safe_ssh_setup.sudo import SudoHelper
+    SudoHelper.start_keepalive()
+
     if "--disable" in sys.argv:
         from safe_ssh_setup.disable import disable_ssh
         disable_ssh()

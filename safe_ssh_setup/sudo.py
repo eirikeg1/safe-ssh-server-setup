@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
 
 
 class SudoHelper:
@@ -28,12 +30,34 @@ class SudoHelper:
 
     @staticmethod
     def refresh_credentials() -> None:
-        """Refresh the sudo credential cache."""
+        """Refresh the sudo credential cache (non-interactive)."""
         subprocess.run(
-            ["sudo", "-v"],
+            ["sudo", "-n", "-v"],
             capture_output=True,
-            timeout=10,
+            timeout=5,
         )
+
+    @staticmethod
+    def start_keepalive() -> None:
+        """Spawn a daemon thread that refreshes sudo credentials every 60s.
+
+        Must be called after initial sudo credentials are obtained.
+        Keeps the cache alive so the TUI never needs to re-prompt.
+        """
+        def _keepalive() -> None:
+            while True:
+                time.sleep(60)
+                try:
+                    subprocess.run(
+                        ["sudo", "-n", "-v"],
+                        capture_output=True,
+                        timeout=5,
+                    )
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+
+        thread = threading.Thread(target=_keepalive, daemon=True)
+        thread.start()
 
     @staticmethod
     def run(
