@@ -51,7 +51,16 @@ class FirewallScreen(WizardScreen):
         fw = FirewallAdapter(distro)
         port = self.state.ssh_config.port
 
-        # Install firewall
+        # Update package lists and install firewall
+        self.state.actions.append(PlannedAction(
+            action_type=ActionType.RUN_COMMAND,
+            description="Update package lists",
+            target="packages",
+            command=pm.update_command(),
+            requires_sudo=True,
+            step_name=self.step_name,
+        ))
+
         fw_packages = fw.install_packages()
         self.state.actions.append(PlannedAction(
             action_type=ActionType.INSTALL_PACKAGE,

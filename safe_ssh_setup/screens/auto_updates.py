@@ -47,6 +47,16 @@ class AutoUpdatesScreen(WizardScreen):
         distro = detect_distro()
         pm = PackageManager(distro)
 
+        # Update package lists
+        self.state.actions.append(PlannedAction(
+            action_type=ActionType.RUN_COMMAND,
+            description="Update package lists",
+            target="packages",
+            command=pm.update_command(),
+            requires_sudo=True,
+            step_name=self.step_name,
+        ))
+
         # Install auto-updates package
         self.state.actions.append(PlannedAction(
             action_type=ActionType.INSTALL_PACKAGE,

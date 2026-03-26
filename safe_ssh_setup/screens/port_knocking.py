@@ -44,6 +44,27 @@ class PortKnockingScreen(WizardScreen):
             classes="section-description",
         )
 
+    def validate_step(self) -> str | None:
+        if not self.query_one("#enable-knock", Switch).value:
+            return None
+        seq_str = self.query_one("#knock-sequence", Input).value
+        try:
+            ports = [int(p.strip()) for p in seq_str.split(",") if p.strip()]
+        except ValueError:
+            return "Knock sequence must be comma-separated port numbers."
+        if len(ports) < 2:
+            return "Knock sequence needs at least 2 ports."
+        for p in ports:
+            if not 1 <= p <= 65535:
+                return f"Invalid port in knock sequence: {p}"
+        try:
+            timeout = int(self.query_one("#knock-timeout", Input).value or "0")
+        except ValueError:
+            return "Timeout must be a valid number."
+        if timeout < 1:
+            return "Timeout must be at least 1 second."
+        return None
+
     def save_state(self) -> None:
         enabled = self.query_one("#enable-knock", Switch).value
         self.state.port_knocking.enabled = enabled
@@ -67,7 +88,16 @@ class PortKnockingScreen(WizardScreen):
         distro = detect_distro()
         pm = PackageManager(distro)
 
-        # Install knockd
+        # Update package lists and install knockd
+        self.state.actions.append(PlannedAction(
+            action_type=ActionType.RUN_COMMAND,
+            description="Update package lists",
+            target="packages",
+            command=pm.update_command(),
+            requires_sudo=True,
+            step_name=self.step_name,
+        ))
+
         self.state.actions.append(PlannedAction(
             action_type=ActionType.INSTALL_PACKAGE,
             description="Install knockd",

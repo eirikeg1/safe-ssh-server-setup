@@ -37,6 +37,23 @@ class Fail2BanScreen(WizardScreen):
         yield Label("Ban time (seconds) - how long an IP is banned:")
         yield Input(value="3600", id="ban-time", type="integer")
 
+    def validate_step(self) -> str | None:
+        if not self.query_one("#enable-f2b", Switch).value:
+            return None
+        try:
+            mr = int(self.query_one("#max-retry", Input).value or "0")
+            ft = int(self.query_one("#find-time", Input).value or "0")
+            bt = int(self.query_one("#ban-time", Input).value or "0")
+        except ValueError:
+            return "All values must be valid numbers."
+        if mr < 1:
+            return "Max retry must be at least 1."
+        if ft < 1:
+            return "Find time must be at least 1 second."
+        if bt < 1:
+            return "Ban time must be at least 1 second."
+        return None
+
     def save_state(self) -> None:
         enabled = self.query_one("#enable-f2b", Switch).value
         self.state.fail2ban.enabled = enabled
@@ -90,6 +107,7 @@ class Fail2BanScreen(WizardScreen):
         content = template.render(
             f2b=self.state.fail2ban,
             ssh_port=self.state.ssh_config.port,
+            ssh_service=self.state.ssh_service,
             timestamp=datetime.now().isoformat(),
         )
 

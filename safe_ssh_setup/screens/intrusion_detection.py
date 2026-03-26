@@ -44,7 +44,16 @@ class IntrusionDetectionScreen(WizardScreen):
         distro = detect_distro()
         pm = PackageManager(distro)
 
-        # Install rkhunter
+        # Update package lists and install rkhunter
+        self.state.actions.append(PlannedAction(
+            action_type=ActionType.RUN_COMMAND,
+            description="Update package lists",
+            target="packages",
+            command=pm.update_command(),
+            requires_sudo=True,
+            step_name=self.step_name,
+        ))
+
         self.state.actions.append(PlannedAction(
             action_type=ActionType.INSTALL_PACKAGE,
             description="Install rkhunter",

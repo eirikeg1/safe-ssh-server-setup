@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import random
+import subprocess
 
 from textual.app import ComposeResult
 from textual.widgets import Input, Label, RadioButton, RadioSet, Static
 
 from safe_ssh_setup.screens.base import WizardScreen
+
+PORT_DEPENDENT_STEPS = ["fail2ban", "firewall", "port_knocking"]
 
 
 class SSHPortScreen(WizardScreen):
@@ -50,7 +53,32 @@ class SSHPortScreen(WizardScreen):
             return "Please enter a valid port number."
         if not 1 <= port <= 65535:
             return "Port must be between 1 and 65535."
+        if port < 1024 and port != 22:
+            return f"Port {port} is a privileged port. Use a port >= 1024 or keep 22."
+
+        # Check if port is already in use (by something other than sshd)
+        if self._is_port_in_use(port):
+            return f"Port {port} is already in use by another service."
+
         return None
+
+    def _is_port_in_use(self, port: int) -> bool:
+        try:
+            result = subprocess.run(
+                ["ss", "-tlnH"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 4:
+                    addr = parts[3]
+                    if addr.endswith(f":{port}"):
+                        return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return False
 
     def _get_selected_port(self) -> int | None:
         radio_set = self.query_one("#port-choice", RadioSet)
@@ -71,4 +99,12 @@ class SSHPortScreen(WizardScreen):
     def save_state(self) -> None:
         port = self._get_selected_port()
         if port is not None:
+            old_port = self.state.ssh_config.port
             self.state.ssh_config.port = port
+
+            # If port changed, invalidate downstream actions that reference it
+            if port != old_port:
+                for step in PORT_DEPENDENT_STEPS:
+                    self.state.actions = [
+                        a for a in self.state.actions if a.step_name != step
+                    ]

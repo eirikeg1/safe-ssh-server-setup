@@ -5,10 +5,10 @@
 banaction = iptables-multiport
 banaction_allports = iptables-allports
 
-[sshd]
+[{{ ssh_service }}]
 enabled = true
 port = {{ ssh_port }}
-filter = sshd
+filter = {{ ssh_service }}
 maxretry = {{ f2b.max_retry }}
 findtime = {{ f2b.find_time }}
 bantime = {{ f2b.ban_time }}

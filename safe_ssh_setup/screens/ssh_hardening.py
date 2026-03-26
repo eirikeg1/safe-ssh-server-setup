@@ -87,6 +87,24 @@ class SSHHardeningScreen(WizardScreen):
                 id="kex",
             )
 
+    def validate_step(self) -> str | None:
+        try:
+            mat = int(self.query_one("#max-auth-tries", Input).value or "0")
+            lgt = int(self.query_one("#login-grace-time", Input).value or "0")
+            cai = int(self.query_one("#alive-interval", Input).value or "0")
+            cac = int(self.query_one("#alive-count", Input).value or "0")
+        except ValueError:
+            return "All numeric values must be valid numbers."
+        if mat < 1:
+            return "Max auth tries must be at least 1."
+        if lgt < 1:
+            return "Login grace time must be at least 1 second."
+        if cai < 0:
+            return "Client alive interval cannot be negative."
+        if cac < 0:
+            return "Client alive count cannot be negative."
+        return None
+
     def save_state(self) -> None:
         cfg = self.state.ssh_config
 
@@ -158,6 +176,15 @@ class SSHHardeningScreen(WizardScreen):
         ))
 
         svc = self.state.ssh_service
+
+        self.state.actions.append(PlannedAction(
+            action_type=ActionType.CREATE_DIR,
+            description="Create sshd privilege separation directory",
+            target="/run/sshd",
+            command="mkdir -p /run/sshd",
+            requires_sudo=True,
+            step_name=self.step_name,
+        ))
 
         self.state.actions.append(PlannedAction(
             action_type=ActionType.RUN_COMMAND,

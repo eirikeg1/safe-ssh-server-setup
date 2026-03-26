@@ -38,7 +38,9 @@ class SummaryScreen(WizardScreen):
 
         if self.state.ssh_key.generate_key:
             key_path = self.state.ssh_key.key_path or "~/.ssh/id_ed25519"
-            items.append(f"  SSH key: {key_path}")
+            items.append(f"  SSH key: generated at {key_path}")
+        elif self.state.ssh_key.setup_authorized_keys:
+            items.append("  SSH key: client public key added to authorized_keys")
 
         if self.state.fail2ban.enabled:
             items.append(
@@ -63,6 +65,23 @@ class SummaryScreen(WizardScreen):
             items.append("  Intrusion detection: rkhunter enabled")
 
         yield Static("\n".join(items), classes="summary-section")
+
+        # Not configured
+        skipped = []
+        if not self.state.fail2ban.enabled:
+            skipped.append("  Fail2Ban (brute-force protection)")
+        if not self.state.firewall.enabled:
+            skipped.append("  Firewall")
+        if not self.state.auto_updates.enabled:
+            skipped.append("  Automatic security updates")
+        if not self.state.port_knocking.enabled:
+            skipped.append("  Port knocking")
+        if not self.state.intrusion_detection.enabled:
+            skipped.append("  Intrusion detection (rkhunter)")
+
+        if skipped:
+            yield Static("Not configured", classes="section-header")
+            yield Static("\n".join(skipped), classes="summary-section")
 
         # Backup info
         if self.state.backup_dir:
