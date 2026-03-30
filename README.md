@@ -1,6 +1,6 @@
 # safe-ssh-setup
 
-A terminal TUI wizard that hardens your SSH server step by step. Designed to make it safe to expose SSH on your home network.
+A terminal TUI wizard that guides you through setting up a SSH server with security measures. Can be used to easily set up SSH safely on your home network.
 
 ## Features
 
