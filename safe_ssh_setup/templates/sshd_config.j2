@@ -15,6 +15,10 @@ ListenAddress ::
 PermitRootLogin {{ ssh.permit_root_login }}
 PubkeyAuthentication {{ "yes" if ssh.pubkey_authentication else "no" }}
 AuthorizedKeysFile .ssh/authorized_keys
+{% if ssh.allow_users %}
+# Only these accounts may log in at all, whatever keys exist elsewhere.
+AllowUsers {{ ssh.allow_users | join(" ") }}
+{% endif %}
 PasswordAuthentication {{ "yes" if ssh.password_authentication else "no" }}
 PermitEmptyPasswords {{ "yes" if ssh.permit_empty_passwords else "no" }}
 KbdInteractiveAuthentication {{ "yes" if ssh.kbd_interactive_auth else "no" }}

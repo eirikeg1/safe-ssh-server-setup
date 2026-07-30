@@ -78,6 +78,16 @@ def test_sshd_config_sets_authorized_keys_file():
     assert "AuthorizedKeysFile .ssh/authorized_keys" in render_sshd()
 
 
+def test_allow_users_is_emitted_when_set():
+    result = render_sshd(ssh=SSHConfig(allow_users=["eirik", "alice@10.0.0.*"]))
+    assert "AllowUsers eirik alice@10.0.0.*" in result
+
+
+def test_allow_users_is_omitted_when_unrestricted():
+    """No directive at all, rather than an empty one that would deny everyone."""
+    assert "AllowUsers" not in render_sshd(ssh=SSHConfig(allow_users=[]))
+
+
 def test_sshd_config_documents_that_dropins_are_ignored():
     result = render_sshd()
     assert "does not Include" in result

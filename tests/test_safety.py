@@ -19,9 +19,32 @@ def facts(**overrides) -> LockoutFacts:
         firewall_currently_active=False,
         knocking_enabled=False,
         knocking_acknowledged=False,
+        user="eirik",
+        allow_users=[],
     )
     base.update(overrides)
     return LockoutFacts(**base)
+
+
+def test_allow_users_without_the_target_user_is_blocked():
+    """AllowUsers that omits the account we install a key for is a lockout."""
+    problems = evaluate_lockout_risks(facts(allow_users=["alice", "bob"]))
+    assert len(problems) == 1
+    assert "does not include" in problems[0]
+
+
+def test_allow_users_containing_the_target_user_is_fine():
+    assert evaluate_lockout_risks(facts(allow_users=["alice", "eirik"])) == []
+
+
+def test_allow_users_host_pattern_still_matches():
+    assert evaluate_lockout_risks(
+        facts(allow_users=["eirik@192.168.1.*"])
+    ) == []
+
+
+def test_empty_allow_users_means_unrestricted():
+    assert evaluate_lockout_risks(facts(allow_users=[])) == []
 
 
 def test_a_normal_configuration_is_allowed():

@@ -14,9 +14,16 @@ from safe_ssh_setup.distro import (
 from safe_ssh_setup.models import ActionType, DistroFamily, PlannedAction
 from safe_ssh_setup.screens.base import WizardScreen
 from safe_ssh_setup.sudo import SudoHelper
-from safe_ssh_setup.system import selinux_enabled, sftp_server_path
+from safe_ssh_setup.system import (
+    selinux_enabled,
+    sftp_server_path,
+    target_user,
+    user_exists,
+)
 from safe_ssh_setup.validation import (
     ValidationError,
+    parse_user_list,
+    user_in_allow_list,
     validate_algorithm_list,
     validate_non_negative,
     validate_positive,
@@ -59,6 +66,21 @@ class SSHHardeningScreen(WizardScreen):
 
         yield Label("Disable keyboard-interactive auth")
         yield Switch(value=not cfg.kbd_interactive_auth, id="disable-kbd")
+
+        yield Label("Restrict login to specific users (recommended)")
+        yield Switch(value=cfg.restrict_users, id="limit-users")
+
+        yield Static(
+            "Without this, any account on this machine with a key in its "
+            "authorized_keys can log in. Space- or comma-separated; entries "
+            "may carry a host pattern, e.g. 'eirik@192.168.1.*'.",
+            classes="section-description",
+        )
+        yield Input(
+            value=" ".join(cfg.allow_users) or target_user(),
+            id="allow-users",
+            disabled=not cfg.restrict_users,
+        )
 
         yield Static("Connection Limits", classes="section-header")
 
@@ -104,7 +126,40 @@ class SSHHardeningScreen(WizardScreen):
             yield Label("Key exchange algorithms (comma-separated):")
             yield Input(value=",".join(cfg.kex_algorithms), id="kex")
 
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id == "limit-users":
+            self.query_one("#allow-users", Input).disabled = not event.value
+
+    def _allow_users(self) -> list[str]:
+        if not self.query_one("#limit-users", Switch).value:
+            return []
+        return parse_user_list(self.query_one("#allow-users", Input).value)
+
     def validate_step(self) -> str | None:
+        try:
+            users = self._allow_users()
+        except ValidationError as e:
+            return str(e)
+
+        if users:
+            # A typo here is a lockout, so check the accounts are real and that
+            # the user we are installing a key for is actually allowed.
+            unknown = [
+                u for u in users if not user_exists(u.split("@", 1)[0])
+            ]
+            if unknown:
+                return (
+                    "No such account on this machine: "
+                    + ", ".join(unknown)
+                    + ". Check the spelling."
+                )
+            if not user_in_allow_list(target_user(), users):
+                return (
+                    f"'{target_user()}' is not in the allowed users list, but "
+                    "that is the account whose authorized_keys this wizard "
+                    f"sets up. Add {target_user()} to the list."
+                )
+
         try:
             validate_positive(
                 self.query_one("#max-auth-tries", Input).value, "Max auth tries"
@@ -154,6 +209,9 @@ class SSHHardeningScreen(WizardScreen):
         cfg.client_alive_count_max = validate_non_negative(
             self.query_one("#alive-count", Input).value, "Client alive count"
         )
+
+        cfg.restrict_users = self.query_one("#limit-users", Switch).value
+        cfg.allow_users = self._allow_users()
 
         cfg.x11_forwarding = self.query_one("#x11-fwd", Switch).value
         cfg.allow_agent_forwarding = self.query_one("#agent-fwd", Switch).value

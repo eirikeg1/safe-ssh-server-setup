@@ -57,6 +57,14 @@ class SummaryScreen(WizardScreen):
             f"  Root login: {self.state.ssh_config.permit_root_login}",
         ]
 
+        if self.state.ssh_config.allow_users:
+            items.append(
+                "  Login restricted to: "
+                + " ".join(self.state.ssh_config.allow_users)
+            )
+        else:
+            items.append("  Login restricted to: (any account with a key)")
+
         if self.state.ssh_key.generate_key:
             key_path = self.state.ssh_key.key_path or "~/.ssh/id_ed25519"
             items.append(f"  SSH key: generated at {key_path}")

@@ -101,8 +101,10 @@ knockd will be opening the SSH port.
   the exact order it will execute.
 - **The Review step refuses to continue** if the configuration would lock you
   out: key-only authentication with no installed key, a moved port behind an
-  active firewall that nothing will open, or port knocking without an
-  acknowledged risk.
+  active firewall that nothing will open, an `AllowUsers` list that omits the
+  account the key is installed for, or port knocking without an acknowledged
+  risk. Usernames are checked against real accounts, because a typo there is a
+  lockout.
 - **sshd is configured, restarted and verified before the firewall is touched.**
   If the config fails validation, the daemon fails to restart, or nothing ends up
   listening on the new port, the run aborts, the original `sshd_config` is
@@ -121,6 +123,8 @@ The wizard applies these defaults (all configurable in the TUI):
 **Authentication**
 - Key-only authentication (passwords disabled)
 - Root login disabled
+- Login restricted to your account via `AllowUsers` (editable; without it,
+  any account on the machine with a key in its `authorized_keys` can log in)
 - Max 3 authentication attempts
 - 30s login grace time
 - 5 minute idle timeout

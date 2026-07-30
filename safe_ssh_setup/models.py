@@ -92,6 +92,10 @@ class SSHConfig:
     x11_forwarding: bool = False
     allow_agent_forwarding: bool = False
     allow_tcp_forwarding: bool = False
+    # restrict_users distinguishes "not configured yet" from "deliberately
+    # unrestricted"; allow_users is empty in both cases.
+    restrict_users: bool = True
+    allow_users: list[str] = field(default_factory=list)
     ciphers: list[str] = field(default_factory=lambda: [
         "chacha20-poly1305@openssh.com",
         "aes256-gcm@openssh.com",

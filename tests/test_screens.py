@@ -25,6 +25,7 @@ from safe_ssh_setup.screens.ssh_hardening import SSHHardeningScreen
 from safe_ssh_setup.screens.ssh_key import SSHKeyScreen
 from safe_ssh_setup.screens.ssh_port import SSHPortScreen
 from safe_ssh_setup.screens.summary import SummaryScreen
+from safe_ssh_setup.system import target_user
 
 
 class ScreenHost(App):
@@ -231,6 +232,51 @@ def test_hardening_plans_validation_restart_and_verification(state):
     critical = {a.description for a in state.actions if a.critical}
     assert "Validate sshd_config syntax" in critical
     assert "Restart SSH daemon" in critical
+
+
+def test_hardening_defaults_to_restricting_login_to_the_current_user(state):
+    snap = drive(make_screen(SSHHardeningScreen, state), snapshot)
+    assert snap["switches"]["limit-users"] is True
+    assert snap["inputs"]["allow-users"] == target_user()
+
+
+def test_hardening_remembers_an_unrestricted_choice(state):
+    state.ssh_config.restrict_users = False
+    state.ssh_config.allow_users = []
+
+    snap = drive(make_screen(SSHHardeningScreen, state), snapshot)
+    assert snap["switches"]["limit-users"] is False
+
+
+def test_hardening_saves_the_allowed_user_list(state):
+    def body(screen):
+        screen.query_one("#allow-users").value = f"{target_user()}, root"
+        screen.save_state()
+
+    drive(make_screen(SSHHardeningScreen, state), body)
+    assert state.ssh_config.allow_users == [target_user(), "root"]
+
+
+def test_hardening_rejects_an_allow_list_without_the_target_user(state):
+    def body(screen):
+        screen.query_one("#allow-users").value = "root"
+        screen._result = screen.validate_step()
+
+    screen = make_screen(SSHHardeningScreen, state)
+    drive(screen, body)
+    assert screen._result is not None
+    assert "not in the allowed users list" in screen._result
+
+
+def test_hardening_rejects_a_misspelled_username(state):
+    def body(screen):
+        screen.query_one("#allow-users").value = "definitely-not-a-real-account"
+        screen._result = screen.validate_step()
+
+    screen = make_screen(SSHHardeningScreen, state)
+    drive(screen, body)
+    assert screen._result is not None
+    assert "No such account" in screen._result
 
 
 def test_hardening_generates_host_keys_before_validating(state):

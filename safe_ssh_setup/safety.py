@@ -10,11 +10,11 @@ The decision logic is a pure function so it can be tested without a system.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from safe_ssh_setup.models import ActionType, WizardState
 from safe_ssh_setup.system import read_authorized_keys, target_user
-from safe_ssh_setup.validation import authorized_keys_has_key
+from safe_ssh_setup.validation import authorized_keys_has_key, user_in_allow_list
 
 
 @dataclass
@@ -28,6 +28,7 @@ class LockoutFacts:
     knocking_enabled: bool
     knocking_acknowledged: bool
     user: str = "your user"
+    allow_users: list[str] = field(default_factory=list)
 
 
 def evaluate_lockout_risks(facts: LockoutFacts) -> list[str]:
@@ -52,6 +53,15 @@ def evaluate_lockout_risks(facts: LockoutFacts) -> list[str]:
             "the Firewall step is disabled — nothing will open the new port. "
             "Enable the Firewall step, or open the port yourself before "
             "applying."
+        )
+
+    if not user_in_allow_list(facts.user, facts.allow_users):
+        allowed = " ".join(facts.allow_users)
+        problems.append(
+            f"sshd will be restricted to '{allowed}', which does not include "
+            f"'{facts.user}' — the account this wizard installs a key for. "
+            "You would have no way in. Fix the allowed users list in SSH "
+            "Hardening."
         )
 
     if facts.knocking_enabled and not facts.knocking_acknowledged:
@@ -107,6 +117,7 @@ def collect_facts(state: WizardState) -> LockoutFacts:
         knocking_enabled=state.port_knocking.enabled,
         knocking_acknowledged=state.port_knocking.risk_acknowledged,
         user=target_user(),
+        allow_users=list(state.ssh_config.allow_users),
     )
 
 

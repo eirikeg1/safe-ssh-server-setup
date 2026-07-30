@@ -17,7 +17,9 @@ from safe_ssh_setup.validation import (
     authorized_keys_has_key,
     is_valid_public_key,
     parse_knock_sequence,
+    parse_user_list,
     pick_random_port,
+    user_in_allow_list,
     validate_algorithm_list,
     validate_port,
     validate_public_key,
@@ -139,6 +141,52 @@ def test_knock_sequence_requires_three_distinct_ports():
         parse_knock_sequence("7000,notaport,9000")
     with pytest.raises(ValidationError):
         parse_knock_sequence("7000,8000,99999")
+
+
+def test_user_list_accepts_names_and_host_patterns():
+    assert parse_user_list("eirik") == ["eirik"]
+    assert parse_user_list("eirik alice") == ["eirik", "alice"]
+    assert parse_user_list("eirik, alice") == ["eirik", "alice"]
+    assert parse_user_list("eirik@192.168.1.*") == ["eirik@192.168.1.*"]
+
+
+def test_user_list_deduplicates_and_requires_an_entry():
+    assert parse_user_list("eirik eirik") == ["eirik"]
+    with pytest.raises(ValidationError):
+        parse_user_list("")
+    with pytest.raises(ValidationError):
+        parse_user_list("   ")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "eirik\nPermitRootLogin yes",
+        "eirik\rPermitRootLogin yes",
+        "eirik;PasswordAuthentication yes",
+        "root#comment",
+        "-flag",
+        "eirik $(id)",
+        'eirik"',
+    ],
+)
+def test_user_list_rejects_config_injection(payload):
+    """AllowUsers is written into sshd_config, so nothing may add a directive."""
+    with pytest.raises(ValidationError):
+        parse_user_list(payload)
+
+
+def test_spaces_separate_users_rather_than_being_rejected():
+    """sshd's AllowUsers is space-separated, so this is two users, not an error."""
+    assert parse_user_list("us er") == ["us", "er"]
+
+
+def test_user_in_allow_list():
+    assert user_in_allow_list("eirik", [])          # unrestricted
+    assert user_in_allow_list("eirik", ["eirik"])
+    assert user_in_allow_list("eirik", ["eirik@10.0.0.*"])
+    assert not user_in_allow_list("eirik", ["alice", "bob"])
+    assert not user_in_allow_list("eirik", ["eirikson"])
 
 
 def test_algorithm_list_rejects_metacharacters():

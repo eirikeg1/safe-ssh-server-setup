@@ -57,6 +57,14 @@ def target_home() -> Path:
         return Path.home()
 
 
+def user_exists(name: str) -> bool:
+    try:
+        pwd.getpwnam(name)
+    except KeyError:
+        return False
+    return True
+
+
 def running_as_root_without_sudo_user() -> bool:
     """True when invoked directly as root rather than escalated via sudo."""
     return os.geteuid() == 0 and not os.environ.get("SUDO_USER")

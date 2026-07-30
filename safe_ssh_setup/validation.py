@@ -214,6 +214,56 @@ def validate_non_negative(raw: str | None, name: str) -> int:
     return value
 
 
+# sshd's AllowUsers accepts "user" and "user@host-pattern" entries. Anything
+# outside this set could inject a second directive into sshd_config.
+ALLOW_USER_PATTERN = re.compile(
+    r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,31}\$?"
+    r"(?:@[A-Za-z0-9_.\-*?\[\]:/]+)?$"
+)
+
+
+def parse_user_list(raw: str) -> list[str]:
+    """Split an AllowUsers list on commas or whitespace and validate each entry.
+
+    A typo here locks you out, so the rules are strict and the errors name the
+    offending entry.
+    """
+    if raw and ("\n" in raw or "\r" in raw):
+        # Splitting would silently turn a pasted block into a list of
+        # "usernames". Refuse it so the mistake is visible.
+        raise ValidationError(
+            "The allowed users list must be a single line of names separated "
+            "by spaces or commas."
+        )
+
+    entries = [e for e in re.split(r"[,\s]+", (raw or "").strip()) if e]
+    if not entries:
+        raise ValidationError(
+            "Enter at least one username, or turn off login restriction."
+        )
+
+    seen: list[str] = []
+    for entry in entries:
+        if not ALLOW_USER_PATTERN.match(entry):
+            raise ValidationError(
+                f"{entry!r} is not a valid username. Use names like 'eirik' "
+                "or patterns like 'eirik@192.168.1.*'."
+            )
+        if entry not in seen:
+            seen.append(entry)
+    return seen
+
+
+def user_in_allow_list(user: str, allow_users: list[str]) -> bool:
+    """Whether `user` can log in given an AllowUsers list.
+
+    Entries may carry a host pattern, so compare only the account part.
+    """
+    if not allow_users:
+        return True
+    return any(entry.split("@", 1)[0] == user for entry in allow_users)
+
+
 def validate_algorithm_list(raw: str, name: str) -> list[str]:
     """Split a comma-separated crypto list, rejecting shell/config metacharacters."""
     items = [item.strip() for item in (raw or "").split(",") if item.strip()]
