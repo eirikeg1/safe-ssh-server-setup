@@ -233,6 +233,21 @@ def test_hardening_plans_validation_restart_and_verification(state):
     assert "Restart SSH daemon" in critical
 
 
+def test_hardening_generates_host_keys_before_validating(state):
+    """sshd -t exits 1 with "no hostkeys available" on a machine where the
+    daemon has never been started, because sshd.service normally creates them
+    on first start."""
+    drive(make_screen(SSHHardeningScreen, state), lambda s: s.save_state())
+
+    commands = [a.command for a in state.actions if a.command]
+    keygen = next(i for i, c in enumerate(commands) if c == ["ssh-keygen", "-A"])
+    validate = next(i for i, c in enumerate(commands) if c[:2] == ["sshd", "-t"])
+    assert keygen < validate
+
+    action = next(a for a in state.actions if a.command == ["ssh-keygen", "-A"])
+    assert action.critical
+
+
 def test_hardening_labels_the_port_for_selinux_on_rhel(state):
     state.ssh_config.port = 2222
     drive(make_screen(SSHHardeningScreen, state), lambda s: s.save_state())

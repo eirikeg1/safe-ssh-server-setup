@@ -43,6 +43,7 @@ class ActionExecutor:
         self.manifest: BackupManifest | None = None
         self.aborted = False
         self.abort_reason = ""
+        self.ssh_was_active = False
 
     # ---------------------------------------------------------------- backup
 
@@ -301,6 +302,10 @@ class ActionExecutor:
                 ),
             )
 
+        # Recorded before anything runs: aborting must not leave the daemon
+        # running when it was stopped beforehand.
+        self.ssh_was_active = self._service_is_active(self.state.ssh_service)
+
         actions = ordered_actions(self.state.actions)
         results: list[tuple[PlannedAction, bool, str]] = []
         total = len(actions)
@@ -343,28 +348,45 @@ class ActionExecutor:
 
         return results
 
+    def _service_is_active(self, service: str) -> bool:
+        return self.sudo.run(["systemctl", "is-active", service]).stdout.strip() == (
+            "active"
+        )
+
     def _restore_sshd_config(self) -> str:
-        """Put the original sshd_config back and restart the daemon."""
+        """Put the original sshd_config back and restore the daemon's state.
+
+        "Restore" means the state the machine was in before the run. Restarting
+        unconditionally would *start* a daemon that had been stopped, which on
+        a first run also generates host keys and opens port 22 with the distro
+        default config.
+        """
         if not self.backup_dir:
             return "no backup directory; nothing restored"
 
         backup_path = self.backup_dir / SSHD_CONFIG.lstrip("/")
         if not self.sudo.file_exists(str(backup_path)):
-            return "no sshd_config backup existed; nothing restored"
+            note = "no sshd_config backup existed; nothing restored"
+        else:
+            copied = self.sudo.run(["cp", "-p", str(backup_path), SSHD_CONFIG])
+            if copied.returncode != 0:
+                return f"restore FAILED: {copied.stderr.strip()}"
+            note = "original sshd_config restored"
 
-        copied = self.sudo.run(["cp", "-p", str(backup_path), SSHD_CONFIG])
-        if copied.returncode != 0:
-            return f"restore FAILED: {copied.stderr.strip()}"
+        service = self.state.ssh_service
+        if self.ssh_was_active:
+            result = self.sudo.run(["systemctl", "restart", service])
+            if result.returncode != 0:
+                return f"{note}, but restarting {service} failed: {result.stderr.strip()}"
+            return f"{note} and {service} restarted"
 
-        restarted = self.sudo.run(
-            ["systemctl", "restart", self.state.ssh_service]
-        )
-        if restarted.returncode != 0:
-            return (
-                "original sshd_config restored, but restarting "
-                f"{self.state.ssh_service} failed: {restarted.stderr.strip()}"
-            )
-        return "original sshd_config restored and SSH daemon restarted"
+        # It was not running before, so leave it that way.
+        if self._service_is_active(service):
+            result = self.sudo.run(["systemctl", "stop", service])
+            if result.returncode != 0:
+                return f"{note}, but stopping {service} failed: {result.stderr.strip()}"
+            return f"{note}; {service} stopped (it was not running before)"
+        return f"{note}; {service} left stopped as it was before"
 
     # ------------------------------------------------------------- recovery
 

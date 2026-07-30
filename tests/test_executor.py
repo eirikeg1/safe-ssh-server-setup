@@ -382,6 +382,8 @@ def test_critical_failure_restores_sshd_config(fake_sudo):
         ),
     ]
     fake_sudo.returncodes[("sshd", "-t", "-f", "/etc/ssh/sshd_config")] = 1
+    # Running beforehand, so the daemon should come back on the old config.
+    fake_sudo.stdout[("systemctl", "is-active", "sshd")] = "active"
 
     ex = make_executor(fake_sudo, state)
     ex.prepare_backup_dir()
@@ -392,6 +394,59 @@ def test_critical_failure_restores_sshd_config(fake_sudo):
 
     assert ex.aborted
     assert ["cp", "-p", backup_copy, "/etc/ssh/sshd_config"] in fake_sudo.commands
+    assert ["systemctl", "restart", "sshd"] in fake_sudo.commands
+
+
+def test_abort_does_not_start_a_daemon_that_was_stopped(fake_sudo):
+    """Restoring must return the prior state, not start sshd.
+
+    Restarting unconditionally started a daemon that had been stopped, which
+    on a first run also generates host keys and opens port 22 with the distro
+    default config.
+    """
+    state = WizardState()
+    state.ssh_service = "sshd"
+    state.actions = [PlannedAction(
+        action_type=ActionType.RUN_COMMAND,
+        description="Validate sshd_config syntax",
+        target="sshd",
+        command=["sshd", "-t", "-f", "/etc/ssh/sshd_config"],
+        critical=True,
+        step_name="ssh_hardening",
+    )]
+    fake_sudo.returncodes[("sshd", "-t", "-f", "/etc/ssh/sshd_config")] = 1
+    # sshd is not running beforehand, but the restore attempt starts it.
+    fake_sudo.stdout[("systemctl", "is-active", "sshd")] = "inactive"
+
+    ex = make_executor(fake_sudo, state)
+    ex.prepare_backup_dir()
+    fake_sudo.existing.add(f"{ex.backup_dir}/etc/ssh/sshd_config")
+    ex.execute_all()
+
+    assert ex.aborted
+    assert ["systemctl", "restart", "sshd"] not in fake_sudo.commands
+
+
+def test_abort_restarts_a_daemon_that_was_running(fake_sudo):
+    state = WizardState()
+    state.ssh_service = "sshd"
+    state.actions = [PlannedAction(
+        action_type=ActionType.RUN_COMMAND,
+        description="Validate sshd_config syntax",
+        target="sshd",
+        command=["sshd", "-t", "-f", "/etc/ssh/sshd_config"],
+        critical=True,
+        step_name="ssh_hardening",
+    )]
+    fake_sudo.returncodes[("sshd", "-t", "-f", "/etc/ssh/sshd_config")] = 1
+    fake_sudo.stdout[("systemctl", "is-active", "sshd")] = "active"
+
+    ex = make_executor(fake_sudo, state)
+    ex.prepare_backup_dir()
+    fake_sudo.existing.add(f"{ex.backup_dir}/etc/ssh/sshd_config")
+    ex.execute_all()
+
+    assert ex.aborted
     assert ["systemctl", "restart", "sshd"] in fake_sudo.commands
 
 

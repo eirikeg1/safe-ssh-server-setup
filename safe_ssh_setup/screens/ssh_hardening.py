@@ -237,6 +237,20 @@ class SSHHardeningScreen(WizardScreen):
             step_name=self.step_name,
         ))
 
+        # sshd -t refuses to run without host keys, and on a machine where the
+        # daemon has never been started they do not exist yet: they are
+        # normally created by sshd.service on first start. ssh-keygen -A is
+        # idempotent and only creates the types that are missing.
+        self.state.actions.append(PlannedAction(
+            action_type=ActionType.RUN_COMMAND,
+            description="Generate missing SSH host keys",
+            target=svc,
+            command=["ssh-keygen", "-A"],
+            requires_sudo=True,
+            critical=True,
+            step_name=self.step_name,
+        ))
+
         self.state.actions.append(PlannedAction(
             action_type=ActionType.RUN_COMMAND,
             description="Validate sshd_config syntax",
