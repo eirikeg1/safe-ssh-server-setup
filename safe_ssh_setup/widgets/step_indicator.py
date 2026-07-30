@@ -1,28 +1,18 @@
 from __future__ import annotations
 
+from typing import Sequence
+
 from rich.text import Text
-from textual.widget import Widget
 from textual.app import RenderResult
-
-
-STEP_LABELS = [
-    "Welcome",
-    "Port",
-    "Key",
-    "Harden",
-    "Fail2Ban",
-    "Firewall",
-    "Updates",
-    "Knock",
-    "IDS",
-    "Review",
-    "Apply",
-    "Done",
-]
+from textual.widget import Widget
 
 
 class StepIndicator(Widget):
-    """Horizontal progress indicator showing all wizard steps."""
+    """Horizontal progress indicator showing all wizard steps.
+
+    Labels come from the app's step table rather than a second hardcoded list,
+    so adding or reordering a step cannot desynchronise the two.
+    """
 
     DEFAULT_CSS = """
     StepIndicator {
@@ -36,15 +26,22 @@ class StepIndicator(Widget):
         self,
         current_step: int,
         total_steps: int,
+        labels: Sequence[str] = (),
     ) -> None:
         super().__init__()
         self.current_step = current_step
         self.total_steps = total_steps
+        self.labels = list(labels)
+
+    def _label(self, index: int) -> str:
+        if index < len(self.labels):
+            return self.labels[index]
+        return f"S{index + 1}"
 
     def render(self) -> RenderResult:
         text = Text()
         for i in range(self.total_steps):
-            label = STEP_LABELS[i] if i < len(STEP_LABELS) else f"S{i + 1}"
+            label = self._label(i)
 
             if i < self.current_step:
                 text.append(f" [*] {label} ", style="green")
@@ -57,7 +54,3 @@ class StepIndicator(Widget):
                 text.append("--", style="grey50")
 
         return text
-
-    def update_step(self, step: int) -> None:
-        self.current_step = step
-        self.refresh()

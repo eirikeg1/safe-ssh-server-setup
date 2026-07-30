@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import os
-import re
 from pathlib import Path
 
 from textual.app import ComposeResult
-from textual.widgets import Input, Label, RadioButton, RadioSet, Static, Switch, TextArea
+from textual.widgets import Input, Label, RadioButton, RadioSet, Static, TextArea
 
 from safe_ssh_setup.models import ActionType, PlannedAction
 from safe_ssh_setup.screens.base import WizardScreen
-
-PUBLIC_KEY_PATTERN = re.compile(
-    r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+|ssh-dss)\s+\S+"
+from safe_ssh_setup.system import read_authorized_keys, target_home, target_user
+from safe_ssh_setup.validation import (
+    ValidationError,
+    authorized_keys_has_key,
+    validate_public_key,
 )
 
 
@@ -19,42 +19,62 @@ class SSHKeyScreen(WizardScreen):
     step_name = "ssh_key"
 
     def compose_step(self) -> ComposeResult:
+        user = target_user()
+        home = target_home()
+
         yield Static("SSH Key Setup", classes="section-header")
         yield Static(
             "To connect securely, your client machine's public key must be "
-            "added to this server's authorized_keys file.",
+            f"added to {home}/.ssh/authorized_keys on this server "
+            f"(user: {user}).",
             classes="section-description",
         )
+
+        if authorized_keys_has_key(read_authorized_keys()):
+            yield Static(
+                f"{user} already has at least one key in authorized_keys. "
+                "You can skip this step if that key is the one you use.",
+                classes="section-description",
+            )
+
+        mode = self.state.ssh_key.mode
 
         yield RadioSet(
             RadioButton(
                 "Paste a public key from my client (recommended)",
                 id="radio-paste",
-                value=True,
+                value=mode != "generate",
             ),
             RadioButton(
                 "Generate a new key pair on this server",
                 id="radio-generate",
+                value=mode == "generate",
             ),
             id="key-mode",
         )
 
-        # Paste mode widgets
         yield Static(
             "\nOn your client machine, run:\n"
             "  cat ~/.ssh/id_ed25519.pub\n\n"
-            "Then paste the output below:",
+            "Then paste the single line of output below:",
             classes="section-description",
             id="paste-instructions",
         )
-        yield TextArea(id="pubkey-input")
+        yield TextArea(self.state.ssh_key.public_key, id="pubkey-input")
 
-        # Generate mode widgets
-        home = Path.home()
-        default_path = str(home / ".ssh" / "id_ed25519")
-
+        yield Static(
+            "Generating the key here puts an unencrypted private key on the "
+            "server you are hardening. You must copy it to your client and "
+            "delete it from the server afterwards. Pasting a key from your "
+            "client is safer.",
+            classes="summary-warning",
+            id="generate-warning",
+        )
         yield Label("Key path:", id="keypath-label")
-        yield Input(value=default_path, id="key-path", disabled=True)
+        yield Input(
+            value=str(self.state.ssh_key.key_path or (home / ".ssh" / "id_ed25519")),
+            id="key-path",
+        )
 
     def on_mount(self) -> None:
         self._update_mode_visibility()
@@ -63,127 +83,108 @@ class SSHKeyScreen(WizardScreen):
         self._update_mode_visibility()
 
     def _update_mode_visibility(self) -> None:
-        radio_set = self.query_one("#key-mode", RadioSet)
-        pressed = radio_set.pressed_button
-        is_paste = pressed is None or pressed.id == "radio-paste"
-
+        is_paste = self._is_paste_mode()
         self.query_one("#paste-instructions").display = is_paste
         self.query_one("#pubkey-input").display = is_paste
+        self.query_one("#generate-warning").display = not is_paste
         self.query_one("#keypath-label").display = not is_paste
-        self.query_one("#key-path").disabled = is_paste
-        self.query_one("#key-path", Input).display = not is_paste
+        key_path = self.query_one("#key-path", Input)
+        key_path.display = not is_paste
+        key_path.disabled = is_paste
 
     def _is_paste_mode(self) -> bool:
         radio_set = self.query_one("#key-mode", RadioSet)
         pressed = radio_set.pressed_button
         return pressed is None or pressed.id == "radio-paste"
 
+    def _key_path(self) -> Path:
+        raw = (self.query_one("#key-path", Input).value or "").strip()
+        if not raw:
+            return target_home() / ".ssh" / "id_ed25519"
+        # "~" is not expanded by anything downstream, so expand it here rather
+        # than creating a directory literally named "~".
+        return Path(raw).expanduser()
+
     def validate_step(self) -> str | None:
         if self._is_paste_mode():
-            pubkey = self.query_one("#pubkey-input", TextArea).text.strip()
-            if not pubkey:
-                return "Please paste your public key."
-            if not PUBLIC_KEY_PATTERN.match(pubkey):
-                return (
-                    "That doesn't look like a valid public key. "
-                    "It should start with ssh-ed25519, ssh-rsa, or ecdsa-sha2-..."
-                )
+            try:
+                validate_public_key(self.query_one("#pubkey-input", TextArea).text)
+            except ValidationError as e:
+                return str(e)
+            return None
+
+        path = self._key_path()
+        if not path.is_absolute():
+            return f"Key path must be an absolute path (got {path})."
+        if path.exists() and not path.is_file():
+            return f"Key path exists and is not a file: {path}"
         return None
 
     def save_state(self) -> None:
         self.clear_step_actions()
 
-        ssh_dir = str(Path.home() / ".ssh")
-        auth_keys = str(Path(ssh_dir) / "authorized_keys")
+        ssh_dir = target_home() / ".ssh"
+        auth_keys = ssh_dir / "authorized_keys"
 
-        # Ensure .ssh directory exists with correct permissions
+        # All of these run as the invoking user and are performed natively by
+        # the executor — no shell, so no value here can be interpreted as code.
         self.state.actions.append(PlannedAction(
             action_type=ActionType.CREATE_DIR,
-            description=f"Create SSH directory {ssh_dir}",
-            target=ssh_dir,
-            command=f"mkdir -p {ssh_dir}",
-            requires_sudo=False,
-            step_name=self.step_name,
-        ))
-        self.state.actions.append(PlannedAction(
-            action_type=ActionType.SET_PERMISSIONS,
-            description="Set SSH directory permissions to 700",
-            target=ssh_dir,
+            description=f"Create SSH directory {ssh_dir} (mode 700)",
+            target=str(ssh_dir),
+            command=["mkdir", "-p", "-m", "700", str(ssh_dir)],
             permissions="700",
-            command=f"chmod 700 {ssh_dir}",
             requires_sudo=False,
             step_name=self.step_name,
         ))
 
         if self._is_paste_mode():
-            # Paste mode: write the client's public key to authorized_keys
-            pubkey = self.query_one("#pubkey-input", TextArea).text.strip()
-            self.state.ssh_key.generate_key = False
+            public_key = validate_public_key(
+                self.query_one("#pubkey-input", TextArea).text
+            )
+            self.state.ssh_key.mode = "paste"
+            self.state.ssh_key.public_key = public_key
             self.state.ssh_key.setup_authorized_keys = True
 
             self.state.actions.append(PlannedAction(
-                action_type=ActionType.RUN_COMMAND,
+                action_type=ActionType.APPEND_AUTHORIZED_KEY,
                 description="Add client public key to authorized_keys",
-                target=auth_keys,
-                command=(
-                    f'touch "{auth_keys}" && '
-                    f'grep -qF "{pubkey}" "{auth_keys}" 2>/dev/null || '
-                    f'echo "{pubkey}" >> "{auth_keys}"'
-                ),
-                requires_sudo=False,
-                step_name=self.step_name,
-            ))
-        else:
-            # Generate mode: create a key pair on this server
-            key_path = self.query_one("#key-path", Input).value
-            key_path_str = key_path or str(Path.home() / ".ssh" / "id_ed25519")
-            user = os.environ.get("USER", "root")
-
-            self.state.ssh_key.generate_key = True
-            self.state.ssh_key.key_path = Path(key_path_str)
-
-            self.state.actions.append(PlannedAction(
-                action_type=ActionType.RUN_COMMAND,
-                description=f"Generate Ed25519 SSH key at {key_path_str}",
-                target=key_path_str,
-                command=(
-                    f'[ -f "{key_path_str}" ] && echo "Key already exists, skipping" || '
-                    f'ssh-keygen -t ed25519 -f "{key_path_str}" -N "" -C "{user}@safe-ssh-setup"'
-                ),
-                requires_sudo=False,
-                step_name=self.step_name,
-            ))
-
-            self.state.actions.append(PlannedAction(
-                action_type=ActionType.SET_PERMISSIONS,
-                description="Set private key permissions to 600",
-                target=key_path_str,
+                target=str(auth_keys),
+                public_key=public_key,
                 permissions="600",
-                command=f'[ -f "{key_path_str}" ] && chmod 600 "{key_path_str}" || true',
                 requires_sudo=False,
+                critical=True,
                 step_name=self.step_name,
             ))
+            return
 
-            self.state.actions.append(PlannedAction(
-                action_type=ActionType.RUN_COMMAND,
-                description="Add public key to authorized_keys",
-                target=auth_keys,
-                command=(
-                    f'touch "{auth_keys}" && '
-                    f'grep -qF "$(cat "{key_path_str}.pub")" "{auth_keys}" 2>/dev/null || '
-                    f'cat "{key_path_str}.pub" >> "{auth_keys}"'
-                ),
-                requires_sudo=False,
-                step_name=self.step_name,
-            ))
+        key_path = self._key_path()
+        self.state.ssh_key.mode = "generate"
+        self.state.ssh_key.key_path = key_path
 
-        # Set authorized_keys permissions
         self.state.actions.append(PlannedAction(
-            action_type=ActionType.SET_PERMISSIONS,
-            description="Set authorized_keys permissions to 600",
-            target=auth_keys,
-            permissions="600",
-            command=f'chmod 600 "{auth_keys}"',
+            action_type=ActionType.GENERATE_SSH_KEY,
+            description=f"Generate Ed25519 SSH key at {key_path}",
+            target=str(key_path),
+            key_path=str(key_path),
             requires_sudo=False,
+            critical=True,
             step_name=self.step_name,
         ))
+
+        # The key does not exist until apply time, so the executor reads
+        # <key_path>.pub itself rather than baking a value in now.
+        self.state.actions.append(PlannedAction(
+            action_type=ActionType.APPEND_AUTHORIZED_KEY,
+            description="Add generated public key to authorized_keys",
+            target=str(auth_keys),
+            key_path=str(key_path),
+            permissions="600",
+            requires_sudo=False,
+            critical=True,
+            step_name=self.step_name,
+        ))
+
+    def skip_step(self) -> None:
+        super().skip_step()
+        self.state.ssh_key.public_key = ""

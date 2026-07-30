@@ -6,15 +6,39 @@ from jinja2 import Environment, PackageLoader
 from textual.app import ComposeResult
 from textual.widgets import Collapsible, Input, Label, Static, Switch
 
-from safe_ssh_setup.models import ActionType, PlannedAction
+from safe_ssh_setup.distro import (
+    PackageManager,
+    selinux_port_fallback,
+    selinux_port_steps,
+)
+from safe_ssh_setup.models import ActionType, DistroFamily, PlannedAction
 from safe_ssh_setup.screens.base import WizardScreen
 from safe_ssh_setup.sudo import SudoHelper
+from safe_ssh_setup.system import selinux_enabled, sftp_server_path
+from safe_ssh_setup.validation import (
+    ValidationError,
+    validate_algorithm_list,
+    validate_non_negative,
+    validate_positive,
+)
+
+
+def build_environment() -> Environment:
+    return Environment(
+        loader=PackageLoader("safe_ssh_setup", "templates"),
+        keep_trailing_newline=True,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        autoescape=False,
+    )
 
 
 class SSHHardeningScreen(WizardScreen):
     step_name = "ssh_hardening"
 
     def compose_step(self) -> ComposeResult:
+        cfg = self.state.ssh_config
+
         yield Static("SSH Daemon Hardening", classes="section-header")
         yield Static(
             "Configure sshd for maximum security. "
@@ -22,49 +46,51 @@ class SSHHardeningScreen(WizardScreen):
             classes="section-description",
         )
 
-        # Authentication
         yield Static("Authentication", classes="section-header")
 
         yield Label("Key-only authentication (disable passwords)")
-        yield Switch(value=True, id="key-only-auth")
+        yield Switch(value=not cfg.password_authentication, id="key-only-auth")
 
         yield Label("Disable root login")
-        yield Switch(value=True, id="disable-root")
+        yield Switch(value=cfg.permit_root_login == "no", id="disable-root")
 
         yield Label("Disable empty passwords")
-        yield Switch(value=True, id="disable-empty-pw")
+        yield Switch(value=not cfg.permit_empty_passwords, id="disable-empty-pw")
 
         yield Label("Disable keyboard-interactive auth")
-        yield Switch(value=True, id="disable-kbd")
+        yield Switch(value=not cfg.kbd_interactive_auth, id="disable-kbd")
 
-        # Limits
         yield Static("Connection Limits", classes="section-header")
 
         yield Label("Max authentication tries:")
-        yield Input(value="3", id="max-auth-tries", type="integer")
+        yield Input(value=str(cfg.max_auth_tries), id="max-auth-tries", type="integer")
 
         yield Label("Login grace time (seconds):")
-        yield Input(value="30", id="login-grace-time", type="integer")
+        yield Input(
+            value=str(cfg.login_grace_time), id="login-grace-time", type="integer"
+        )
 
         yield Label("Client alive interval (seconds):")
-        yield Input(value="300", id="alive-interval", type="integer")
+        yield Input(
+            value=str(cfg.client_alive_interval), id="alive-interval", type="integer"
+        )
 
         yield Label("Client alive count max:")
-        yield Input(value="2", id="alive-count", type="integer")
+        yield Input(
+            value=str(cfg.client_alive_count_max), id="alive-count", type="integer"
+        )
 
-        # Forwarding
         yield Static("Forwarding", classes="section-header")
 
         yield Label("Allow X11 forwarding")
-        yield Switch(value=False, id="x11-fwd")
+        yield Switch(value=cfg.x11_forwarding, id="x11-fwd")
 
         yield Label("Allow agent forwarding")
-        yield Switch(value=False, id="agent-fwd")
+        yield Switch(value=cfg.allow_agent_forwarding, id="agent-fwd")
 
         yield Label("Allow TCP forwarding")
-        yield Switch(value=False, id="tcp-fwd")
+        yield Switch(value=cfg.allow_tcp_forwarding, id="tcp-fwd")
 
-        # Cryptography
         with Collapsible(title="Advanced: Cryptography Settings"):
             yield Static(
                 "Strong defaults are pre-selected. Only change these "
@@ -72,37 +98,34 @@ class SSHHardeningScreen(WizardScreen):
                 classes="section-description",
             )
             yield Label("Ciphers (comma-separated):")
-            yield Input(
-                value=",".join(self.state.ssh_config.ciphers),
-                id="ciphers",
-            )
+            yield Input(value=",".join(cfg.ciphers), id="ciphers")
             yield Label("MACs (comma-separated):")
-            yield Input(
-                value=",".join(self.state.ssh_config.macs),
-                id="macs",
-            )
+            yield Input(value=",".join(cfg.macs), id="macs")
             yield Label("Key exchange algorithms (comma-separated):")
-            yield Input(
-                value=",".join(self.state.ssh_config.kex_algorithms),
-                id="kex",
-            )
+            yield Input(value=",".join(cfg.kex_algorithms), id="kex")
 
     def validate_step(self) -> str | None:
         try:
-            mat = int(self.query_one("#max-auth-tries", Input).value or "0")
-            lgt = int(self.query_one("#login-grace-time", Input).value or "0")
-            cai = int(self.query_one("#alive-interval", Input).value or "0")
-            cac = int(self.query_one("#alive-count", Input).value or "0")
-        except ValueError:
-            return "All numeric values must be valid numbers."
-        if mat < 1:
-            return "Max auth tries must be at least 1."
-        if lgt < 1:
-            return "Login grace time must be at least 1 second."
-        if cai < 0:
-            return "Client alive interval cannot be negative."
-        if cac < 0:
-            return "Client alive count cannot be negative."
+            validate_positive(
+                self.query_one("#max-auth-tries", Input).value, "Max auth tries"
+            )
+            validate_positive(
+                self.query_one("#login-grace-time", Input).value, "Login grace time"
+            )
+            validate_non_negative(
+                self.query_one("#alive-interval", Input).value,
+                "Client alive interval",
+            )
+            validate_non_negative(
+                self.query_one("#alive-count", Input).value, "Client alive count"
+            )
+            validate_algorithm_list(self.query_one("#ciphers", Input).value, "Ciphers")
+            validate_algorithm_list(self.query_one("#macs", Input).value, "MACs")
+            validate_algorithm_list(
+                self.query_one("#kex", Input).value, "Key exchange algorithms"
+            )
+        except ValidationError as e:
+            return str(e)
         return None
 
     def save_state(self) -> None:
@@ -119,51 +142,79 @@ class SSHHardeningScreen(WizardScreen):
             "#disable-empty-pw", Switch
         ).value
 
-        cfg.max_auth_tries = int(
-            self.query_one("#max-auth-tries", Input).value or "3"
+        cfg.max_auth_tries = validate_positive(
+            self.query_one("#max-auth-tries", Input).value, "Max auth tries"
         )
-        cfg.login_grace_time = int(
-            self.query_one("#login-grace-time", Input).value or "30"
+        cfg.login_grace_time = validate_positive(
+            self.query_one("#login-grace-time", Input).value, "Login grace time"
         )
-        cfg.client_alive_interval = int(
-            self.query_one("#alive-interval", Input).value or "300"
+        cfg.client_alive_interval = validate_non_negative(
+            self.query_one("#alive-interval", Input).value, "Client alive interval"
         )
-        cfg.client_alive_count_max = int(
-            self.query_one("#alive-count", Input).value or "2"
+        cfg.client_alive_count_max = validate_non_negative(
+            self.query_one("#alive-count", Input).value, "Client alive count"
         )
 
         cfg.x11_forwarding = self.query_one("#x11-fwd", Switch).value
         cfg.allow_agent_forwarding = self.query_one("#agent-fwd", Switch).value
         cfg.allow_tcp_forwarding = self.query_one("#tcp-fwd", Switch).value
 
-        ciphers_str = self.query_one("#ciphers", Input).value
-        if ciphers_str:
-            cfg.ciphers = [c.strip() for c in ciphers_str.split(",") if c.strip()]
+        cfg.ciphers = validate_algorithm_list(
+            self.query_one("#ciphers", Input).value, "Ciphers"
+        )
+        cfg.macs = validate_algorithm_list(
+            self.query_one("#macs", Input).value, "MACs"
+        )
+        cfg.kex_algorithms = validate_algorithm_list(
+            self.query_one("#kex", Input).value, "Key exchange algorithms"
+        )
 
-        macs_str = self.query_one("#macs", Input).value
-        if macs_str:
-            cfg.macs = [m.strip() for m in macs_str.split(",") if m.strip()]
-
-        kex_str = self.query_one("#kex", Input).value
-        if kex_str:
-            cfg.kex_algorithms = [k.strip() for k in kex_str.split(",") if k.strip()]
-
-        # Generate sshd_config
         self.clear_step_actions()
 
-        env = Environment(
-            loader=PackageLoader("safe_ssh_setup", "templates"),
-            keep_trailing_newline=True,
-            trim_blocks=True,
-            lstrip_blocks=True,
-        )
-        template = env.get_template("sshd_config.j2")
+        distro = self.state.distro_info
+        svc = self.state.ssh_service
+        port = cfg.port
+
+        template = build_environment().get_template("sshd_config.j2")
         new_content = template.render(
             ssh=cfg,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now().isoformat(timespec="seconds"),
+            # Resolved per system: sshd -t does not verify this path exists,
+            # so a wrong one silently breaks sftp and scp.
+            sftp_server=sftp_server_path(),
+            sshd_config_dir=distro.sshd_config_dir if distro else "/etc/ssh/sshd_config.d",
         )
 
         original = SudoHelper.read_file("/etc/ssh/sshd_config") or ""
+
+        # SELinux must know about the port before sshd tries to bind it.
+        if (
+            distro
+            and distro.family == DistroFamily.RHEL
+            and selinux_enabled()
+            and port != 22
+        ):
+            pm = PackageManager(distro)
+            self.state.actions.append(PlannedAction(
+                action_type=ActionType.INSTALL_PACKAGE,
+                description="Install SELinux management tools",
+                target="selinux-tools",
+                command=pm.install_command(["selinux-tools"]),
+                requires_sudo=True,
+                step_name=self.step_name,
+            ))
+            for step in selinux_port_steps(port):
+                self.state.actions.append(PlannedAction(
+                    action_type=ActionType.RUN_COMMAND,
+                    description=step.description,
+                    target="selinux",
+                    command=step.argv,
+                    # -a fails when the port is already defined; -m updates it.
+                    fallback_command=selinux_port_fallback(port),
+                    requires_sudo=True,
+                    critical=True,
+                    step_name=self.step_name,
+                ))
 
         self.state.actions.append(PlannedAction(
             action_type=ActionType.WRITE_FILE,
@@ -171,17 +222,17 @@ class SSHHardeningScreen(WizardScreen):
             target="/etc/ssh/sshd_config",
             content=new_content,
             original_content=original,
+            permissions="0600",
             requires_sudo=True,
+            critical=True,
             step_name=self.step_name,
         ))
-
-        svc = self.state.ssh_service
 
         self.state.actions.append(PlannedAction(
             action_type=ActionType.CREATE_DIR,
             description="Create sshd privilege separation directory",
             target="/run/sshd",
-            command="mkdir -p /run/sshd",
+            command=["mkdir", "-p", "/run/sshd"],
             requires_sudo=True,
             step_name=self.step_name,
         ))
@@ -190,8 +241,9 @@ class SSHHardeningScreen(WizardScreen):
             action_type=ActionType.RUN_COMMAND,
             description="Validate sshd_config syntax",
             target=svc,
-            command="sshd -t -f /etc/ssh/sshd_config",
+            command=["sshd", "-t", "-f", "/etc/ssh/sshd_config"],
             requires_sudo=True,
+            critical=True,
             step_name=self.step_name,
         ))
 
@@ -199,7 +251,7 @@ class SSHHardeningScreen(WizardScreen):
             action_type=ActionType.ENABLE_SERVICE,
             description="Enable SSH daemon to start at boot",
             target=svc,
-            command=f"systemctl enable {svc}",
+            command=["systemctl", "enable", svc],
             requires_sudo=True,
             step_name=self.step_name,
         ))
@@ -208,7 +260,20 @@ class SSHHardeningScreen(WizardScreen):
             action_type=ActionType.RESTART_SERVICE,
             description="Restart SSH daemon",
             target=svc,
-            command=f"systemctl restart {svc}",
+            command=["systemctl", "restart", svc],
             requires_sudo=True,
+            critical=True,
+            step_name=self.step_name,
+        ))
+
+        # Confirm sshd actually came back before the firewall locks the box.
+        self.state.actions.append(PlannedAction(
+            action_type=ActionType.VERIFY_SSH,
+            description=f"Verify SSH daemon is listening on port {port}",
+            target=svc,
+            service=svc,
+            port=port,
+            requires_sudo=True,
+            critical=True,
             step_name=self.step_name,
         ))
