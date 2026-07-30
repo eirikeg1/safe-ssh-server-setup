@@ -11,10 +11,16 @@ from safe_ssh_setup.widgets.step_indicator import StepIndicator
 
 
 class WizardScreen(Screen):
-    """Base class for all wizard step screens."""
+    """Base class for all wizard step screens.
+
+    Screens are rebuilt whenever they are shown, so every subclass must derive
+    its widget values from ``self.state`` rather than hardcoding defaults.
+    Otherwise navigating Back and then Next silently reverts the user's input.
+    """
 
     step_name: str = ""
     can_skip: bool = True
+    can_go_back: bool = True
     next_label: str = "Next"
 
     def __init__(
@@ -30,11 +36,15 @@ class WizardScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield StepIndicator(self.step_index, self.total_steps)
+        yield StepIndicator(
+            self.step_index,
+            self.total_steps,
+            labels=getattr(self.app, "step_labels", ()),
+        )
         with VerticalScroll(id="step-content"):
             yield from self.compose_step()
         yield NavBar(
-            show_back=self.step_index > 0,
+            show_back=self.step_index > 0 and self.can_go_back,
             show_skip=self.can_skip,
             show_next=True,
             next_label=self.next_label,
@@ -51,7 +61,14 @@ class WizardScreen(Screen):
 
     def save_state(self) -> None:
         """Save widget values into self.state. Called before advancing."""
-        pass
+
+    def skip_step(self) -> None:
+        """Undo this step.
+
+        Skipping must remove anything the step planned on an earlier visit,
+        otherwise configuring a step and then skipping it still applies it.
+        """
+        self.clear_step_actions()
 
     def clear_step_actions(self) -> None:
         """Remove any previously generated actions from this step."""
@@ -61,13 +78,17 @@ class WizardScreen(Screen):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-next":
+            event.stop()
             error = self.validate_step()
             if error:
-                self.notify(error, severity="error")
+                self.notify(error, severity="error", timeout=10)
                 return
             self.save_state()
             self.app.action_next_step()
         elif event.button.id == "btn-back":
+            event.stop()
             self.app.action_prev_step()
         elif event.button.id == "btn-skip":
+            event.stop()
+            self.skip_step()
             self.app.action_next_step()

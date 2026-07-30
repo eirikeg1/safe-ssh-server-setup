@@ -5,82 +5,141 @@ Usage: python -m safe_ssh_setup.rollback /var/backups/safe-ssh-setup/YYYYMMDD-HH
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
 
 from safe_ssh_setup.sudo import SudoHelper
 
+BACKUP_ROOT = Path("/var/backups/safe-ssh-setup")
 
-def rollback(backup_dir: str) -> None:
+
+def _services_for_path(path: str, ssh_service: str) -> set[str]:
+    services: set[str] = set()
+    if path.startswith("/etc/ssh/"):
+        services.add(ssh_service)
+    if "fail2ban" in path:
+        services.add("fail2ban")
+    if "knockd" in path:
+        services.add("knockd")
+    return services
+
+
+def rollback(backup_dir: str) -> int:
     backup_path = Path(backup_dir)
 
     if not backup_path.exists():
         print(f"Error: Backup directory not found: {backup_dir}")
-        sys.exit(1)
+        return 1
+
+    if not SudoHelper.check_sudo_available():
+        # Every restore below needs root; prompt now rather than failing
+        # halfway through with an invisible password prompt.
+        print("Rollback needs sudo access.")
+        if not SudoHelper.prompt_sudo():
+            print("Error: could not obtain sudo credentials.")
+            return 1
 
     manifest_file = backup_path / "manifest.json"
     if not manifest_file.exists():
         print(f"Error: No manifest.json found in {backup_dir}")
-        print("Try running the rollback.sh script directly instead:")
+        print("Try running the rollback script directly instead:")
         print(f"  sudo bash {backup_path}/rollback.sh")
-        sys.exit(1)
+        return 1
 
     with open(manifest_file) as f:
         manifest = json.load(f)
 
     backed_up_files = manifest.get("backed_up_files", [])
+    created_files = manifest.get("created_files", [])
+    ssh_service = manifest.get("ssh_service", "sshd")
 
-    if not backed_up_files:
-        print("No files to restore.")
-        return
+    if not backed_up_files and not created_files:
+        print("Nothing to roll back.")
+        return 0
 
-    print(f"Restoring {len(backed_up_files)} file(s) from backup...")
+    services: set[str] = set()
+    failures = 0
 
-    services_to_restart = set()
+    if backed_up_files:
+        print(f"Restoring {len(backed_up_files)} modified file(s)...")
+        for original, backup in backed_up_files:
+            result = SudoHelper.run(["cp", "-p", backup, original])
+            if result.returncode == 0:
+                print(f"  restored: {original}")
+                services |= _services_for_path(original, ssh_service)
+            else:
+                failures += 1
+                print(f"  FAILED:   {original} — {result.stderr.strip()}")
 
-    for original, backup in backed_up_files:
-        try:
-            SudoHelper.run(f'cp -p "{backup}" "{original}"')
-            print(f"  Restored: {original}")
+    if created_files:
+        # Files that did not exist before this run must be removed, otherwise
+        # "rollback" leaves the new configuration in place.
+        print(f"\nRemoving {len(created_files)} created file(s)...")
+        for created in created_files:
+            result = SudoHelper.run(["rm", "-f", created])
+            if result.returncode == 0:
+                print(f"  removed:  {created}")
+                services |= _services_for_path(created, ssh_service)
+            else:
+                failures += 1
+                print(f"  FAILED:   {created} — {result.stderr.strip()}")
 
-            if "ssh" in original:
-                # Try both service names — one will exist
-                services_to_restart.add("ssh")
-                services_to_restart.add("sshd")
-            if "fail2ban" in original:
-                services_to_restart.add("fail2ban")
-            if "knockd" in original:
-                services_to_restart.add("knockd")
-        except Exception as e:
-            print(f"  FAILED: {original} — {e}")
-
-    if services_to_restart:
+    if services:
         print("\nRestarting services...")
-        for svc in sorted(services_to_restart):
-            try:
-                SudoHelper.run(f"systemctl restart {svc}")
-                print(f"  Restarted: {svc}")
-            except Exception:
-                print(f"  Failed to restart: {svc}")
+        for service in sorted(services):
+            result = SudoHelper.run(["systemctl", "restart", service])
+            if result.returncode == 0:
+                print(f"  restarted: {service}")
+            else:
+                print(f"  could not restart: {service}")
 
     print("\nRollback complete.")
+    print("\nNOT reverted automatically — undo these by hand if needed:")
+    print("  - firewall rules (ufw/firewalld) and the default zone policy")
+    enabled = manifest.get("services_enabled") or []
+    if enabled:
+        print(f"  - services enabled at boot: {', '.join(enabled)}")
+    port = manifest.get("ssh_port")
+    if port and port != 22:
+        print(
+            "  - SELinux port label: "
+            f"semanage port -d -t ssh_port_t -p tcp {port}"
+        )
+    print("  - packages installed by the wizard")
+
+    return 1 if failures else 0
 
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        print("Usage: python -m safe_ssh_setup.rollback <backup_directory>")
-        print("\nAvailable backups:")
-        backup_base = Path("/var/backups/safe-ssh-setup")
-        if backup_base.exists():
-            for d in sorted(backup_base.iterdir()):
-                if d.is_dir():
-                    print(f"  {d}")
-        else:
-            print("  (none found)")
+def list_backups() -> None:
+    print("Available backups:")
+    if BACKUP_ROOT.exists():
+        entries = sorted(d for d in BACKUP_ROOT.iterdir() if d.is_dir())
+        if entries:
+            for entry in entries:
+                print(f"  {entry}")
+            return
+    print("  (none found)")
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="python -m safe_ssh_setup.rollback",
+        description="Restore a safe-ssh-setup backup.",
+    )
+    parser.add_argument(
+        "backup_directory",
+        nargs="?",
+        help="backup directory to restore; omit to list available backups",
+    )
+    args = parser.parse_args(argv)
+
+    if not args.backup_directory:
+        list_backups()
         sys.exit(1)
 
-    rollback(sys.argv[1])
+    sys.exit(rollback(args.backup_directory))
 
 
 if __name__ == "__main__":

@@ -1,14 +1,38 @@
+"""Privilege escalation helpers.
+
+Every command is passed as an argv list and executed without a shell. Nothing
+here interpolates caller data into a command string, so values that reach these
+helpers (public keys, paths, ports) cannot be interpreted as shell syntax.
+"""
+
 from __future__ import annotations
 
+import os
+import shlex
 import subprocess
 import threading
-import time
+
+from safe_ssh_setup.system import target_user
+
+DEFAULT_TIMEOUT = 300
+KEEPALIVE_INTERVAL = 60
+
+
+class SudoUnavailableError(RuntimeError):
+    """Raised when sudo credentials are not (or no longer) available."""
+
+
+def format_command(argv: list[str] | None) -> str:
+    """Render argv for display. Never fed back into a shell."""
+    if not argv:
+        return ""
+    return shlex.join(argv)
 
 
 class SudoHelper:
     @staticmethod
     def check_sudo_available() -> bool:
-        """Check if the user already has cached sudo credentials."""
+        """Whether the user already has cached sudo credentials."""
         try:
             result = subprocess.run(
                 ["sudo", "-n", "true"],
@@ -16,58 +40,56 @@ class SudoHelper:
                 timeout=5,
             )
             return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return False
 
     @staticmethod
     def prompt_sudo() -> bool:
-        """Prompt the user for sudo credentials. Returns True on success."""
+        """Prompt for sudo credentials on the real terminal."""
         try:
-            result = subprocess.run(["sudo", "-v"], timeout=60)
+            result = subprocess.run(["sudo", "-v"], timeout=120)
             return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return False
 
     @staticmethod
-    def refresh_credentials() -> None:
-        """Refresh the sudo credential cache (non-interactive)."""
-        subprocess.run(
-            ["sudo", "-n", "-v"],
-            capture_output=True,
-            timeout=5,
-        )
+    def refresh_credentials() -> bool:
+        """Refresh the credential cache without ever prompting."""
+        try:
+            result = subprocess.run(
+                ["sudo", "-n", "-v"],
+                capture_output=True,
+                timeout=5,
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
 
     @staticmethod
-    def start_keepalive() -> None:
-        """Spawn a daemon thread that refreshes sudo credentials every 60s.
+    def start_keepalive() -> threading.Event:
+        """Refresh sudo credentials periodically until the returned event is set."""
+        stop = threading.Event()
 
-        Must be called after initial sudo credentials are obtained.
-        Keeps the cache alive so the TUI never needs to re-prompt.
-        """
         def _keepalive() -> None:
-            while True:
-                time.sleep(60)
-                try:
-                    subprocess.run(
-                        ["sudo", "-n", "-v"],
-                        capture_output=True,
-                        timeout=5,
-                    )
-                except (subprocess.TimeoutExpired, OSError):
-                    pass
+            while not stop.wait(KEEPALIVE_INTERVAL):
+                SudoHelper.refresh_credentials()
 
-        thread = threading.Thread(target=_keepalive, daemon=True)
-        thread.start()
+        threading.Thread(target=_keepalive, daemon=True).start()
+        return stop
 
     @staticmethod
     def run(
-        command: str,
-        check: bool = True,
-        timeout: int = 120,
+        argv: list[str],
+        check: bool = False,
+        timeout: int = DEFAULT_TIMEOUT,
     ) -> subprocess.CompletedProcess[str]:
-        """Run a command with sudo."""
+        """Run argv under sudo, non-interactively.
+
+        ``-n`` matters: with output captured, an interactive password prompt
+        would be invisible and the call would block until it timed out.
+        """
         return subprocess.run(
-            ["sudo", "bash", "-c", command],
+            ["sudo", "-n", "--", *argv],
             capture_output=True,
             text=True,
             check=check,
@@ -75,14 +97,21 @@ class SudoHelper:
         )
 
     @staticmethod
-    def run_no_sudo(
-        command: str,
-        check: bool = True,
-        timeout: int = 120,
+    def run_as_user(
+        argv: list[str],
+        check: bool = False,
+        timeout: int = DEFAULT_TIMEOUT,
     ) -> subprocess.CompletedProcess[str]:
-        """Run a command without sudo."""
+        """Run argv as the target (non-root) user.
+
+        When the wizard itself was started with sudo, this drops back down to
+        SUDO_USER so files land in the right home with the right owner.
+        """
+        user = target_user()
+        if os.geteuid() == 0 and user != "root":
+            argv = ["runuser", "-u", user, "--", *argv]
         return subprocess.run(
-            ["bash", "-c", command],
+            argv,
             capture_output=True,
             text=True,
             check=check,
@@ -95,30 +124,64 @@ class SudoHelper:
         content: str,
         mode: str = "0644",
         owner: str = "root:root",
+        timeout: int = 60,
     ) -> None:
-        """Write content to a file using sudo."""
-        subprocess.run(
-            ["sudo", "tee", path],
+        """Write a root-owned file atomically with the final mode applied first.
+
+        Content goes in via stdin, so it is never parsed as a command. The
+        temporary file is chmod/chown'd before being moved into place, so the
+        final path never exists with looser permissions than intended.
+        """
+        tmp_path = f"{path}.safe-ssh-setup.tmp"
+        parent = os.path.dirname(path) or "/"
+
+        mkdir = SudoHelper.run(["mkdir", "-p", parent], timeout=timeout)
+        if mkdir.returncode != 0:
+            raise SudoUnavailableError(
+                f"Could not create {parent}: {mkdir.stderr.strip()}"
+            )
+
+        result = subprocess.run(
+            ["sudo", "-n", "--", "tee", tmp_path],
             input=content,
             capture_output=True,
             text=True,
-            check=True,
+            timeout=timeout,
         )
-        subprocess.run(["sudo", "chmod", mode, path], check=True)
-        subprocess.run(["sudo", "chown", owner, path], check=True)
+        if result.returncode != 0:
+            raise SudoUnavailableError(
+                f"Could not write {tmp_path}: {result.stderr.strip()}"
+            )
+
+        for argv in (
+            ["chmod", mode, tmp_path],
+            ["chown", owner, tmp_path],
+            ["mv", "-f", tmp_path, path],
+        ):
+            step = SudoHelper.run(argv, timeout=timeout)
+            if step.returncode != 0:
+                SudoHelper.run(["rm", "-f", tmp_path], timeout=timeout)
+                raise SudoUnavailableError(
+                    f"{argv[0]} failed for {path}: {step.stderr.strip()}"
+                )
 
     @staticmethod
     def read_file(path: str) -> str | None:
-        """Read a file, using sudo if needed. Returns None if file doesn't exist."""
+        """Read a possibly root-only file. None when absent or unreadable."""
         try:
             result = subprocess.run(
-                ["sudo", "cat", path],
+                ["sudo", "-n", "--", "cat", path],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=15,
             )
-            if result.returncode == 0:
-                return result.stdout
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return None
-        except subprocess.TimeoutExpired:
-            return None
+        if result.returncode == 0:
+            return result.stdout
+        return None
+
+    @staticmethod
+    def file_exists(path: str) -> bool:
+        result = SudoHelper.run(["test", "-e", path], timeout=15)
+        return result.returncode == 0

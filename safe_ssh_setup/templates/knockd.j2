@@ -3,6 +3,10 @@
 #
 # To connect: knock -v server_ip {{ knock.sequence | join(" ") }}
 # Then:       ssh -p {{ ssh_port }} user@server_ip
+#
+# The open/close commands go through {{ firewall_name }} rather than raw
+# iptables. An appended iptables rule is never reached, because ufw and
+# firewalld terminate the packet inside their own chains first.
 
 [options]
     UseSyslog
@@ -10,11 +14,11 @@
 [openSSH]
     sequence    = {{ knock.sequence | join(",") }}
     seq_timeout = {{ knock.seq_timeout }}
-    command     = /sbin/iptables -A INPUT -s %IP% -p tcp --dport {{ ssh_port }} -j ACCEPT
+    command     = {{ open_command }}
     tcpflags    = syn
 
 [closeSSH]
     sequence    = {{ knock.sequence | reverse | join(",") }}
     seq_timeout = {{ knock.seq_timeout }}
-    command     = /sbin/iptables -D INPUT -s %IP% -p tcp --dport {{ ssh_port }} -j ACCEPT
+    command     = {{ close_command }}
     tcpflags    = syn
